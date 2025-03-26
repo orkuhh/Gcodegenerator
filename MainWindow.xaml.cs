@@ -379,12 +379,19 @@ namespace WpfApp1
             // Build a spatial index for triangles to optimize ray casting
             var triangleIndex = BuildTriangleSpatialIndex(triangles, step);
 
-            // Generate grid points using ray casting
-            Parallel.For(0, (int)((maxX - minX) / step) + 1, xIndex =>
-            {
-                double x = minX + xIndex * step;
+            // Calculate grid bounds with a small margin to avoid edge effects
+            // This prevents generating points that are exactly on the model boundaries
+            double gridMinX = Math.Ceiling(minX / step) * step;
+            double gridMaxX = Math.Floor(maxX / step) * step;
+            double gridMinY = Math.Ceiling(minY / step) * step;
+            double gridMaxY = Math.Floor(maxY / step) * step;
 
-                for (double y = minY; y <= maxY; y += step)
+            // Generate grid points using ray casting
+            Parallel.For(0, (int)((gridMaxX - gridMinX) / step) + 1, xIndex =>
+            {
+                double x = gridMinX + xIndex * step;
+
+                for (double y = gridMinY; y <= gridMaxY; y += step)
                 {
                     // Cast ray from above down to the model
                     double? intersectionZ = CastRay(new Point3D(x, y, maxZ), new Vector3D(0, 0, -1), 
@@ -392,9 +399,14 @@ namespace WpfApp1
 
                     if (intersectionZ.HasValue)
                     {
-                        lock (gridPoints)
+                        // Additional filter: ignore points that are very close to the edge
+                        if (x > minX + 0.01 && x < maxX - 0.01 && 
+                            y > minY + 0.01 && y < maxY - 0.01)
                         {
-                            gridPoints.Add(new Point3D(x, y, intersectionZ.Value));
+                            lock (gridPoints)
+                            {
+                                gridPoints.Add(new Point3D(x, y, intersectionZ.Value));
+                            }
                         }
                     }
                 }
@@ -475,12 +487,24 @@ namespace WpfApp1
                                                       triangle.v1, triangle.v2, triangle.v3, 
                                                       out double t))
                             {
-                                // The intersection point is rayOrigin + t * rayDirection
-                                // We're only interested in the Z value for grid height
-                                if (t > 0 && t < closestIntersection) // t > 0 ensures we only get intersections in ray direction
+                                // Calculate the normal of the triangle
+                                Vector3D edge1 = triangle.v2 - triangle.v1;
+                                Vector3D edge2 = triangle.v3 - triangle.v1;
+                                Vector3D normal = Vector3D.CrossProduct(edge1, edge2);
+                                normal.Normalize();
+                                
+                                // Skip near-vertical surfaces (sides of the model)
+                                // This helps avoid generating points on vertical walls
+                                double verticalThreshold = 0.3; // Adjust as needed
+                                if (Math.Abs(normal.Z) > verticalThreshold)
                                 {
-                                    closestIntersection = t;
-                                    foundIntersection = true;
+                                    // The intersection point is rayOrigin + t * rayDirection
+                                    // We're only interested in the Z value for grid height
+                                    if (t > 0 && t < closestIntersection) // t > 0 ensures we only get intersections in ray direction
+                                    {
+                                        closestIntersection = t;
+                                        foundIntersection = true;
+                                    }
                                 }
                             }
                         }
