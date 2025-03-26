@@ -336,10 +336,10 @@ namespace WpfApp1
             if (modelVisual?.Content is not Model3DGroup modelGroup)
                 return gridPoints;
 
-            // Optimize transformations
+            // Optymalizacja transformacji
             var groupTransform = modelVisual.Transform ?? Transform3D.Identity;
 
-            // Precompute all triangles with their transformations
+            // Wstępne obliczenie wszystkich trójkątów z transformacjami
             var triangles = new List<(Point3D v1, Point3D v2, Point3D v3)>();
             
             foreach (var geometryModel in modelGroup.Children.OfType<GeometryModel3D>())
@@ -348,7 +348,7 @@ namespace WpfApp1
                 {
                     var localTransform = geometryModel.Transform;
                     
-                    // Process each triangle
+                    // Przetwarzanie każdego trójkąta
                     for (int i = 0; i < meshGeometry.TriangleIndices.Count; i += 3)
                     {
                         if (i + 2 < meshGeometry.TriangleIndices.Count)
@@ -357,7 +357,7 @@ namespace WpfApp1
                             int idx2 = meshGeometry.TriangleIndices[i + 1];
                             int idx3 = meshGeometry.TriangleIndices[i + 2];
                             
-                            // Get transformed vertices
+                            // Pobieranie przekształconych wierzchołków
                             var v1 = groupTransform.Transform(localTransform.Transform(meshGeometry.Positions[idx1]));
                             var v2 = groupTransform.Transform(localTransform.Transform(meshGeometry.Positions[idx2]));
                             var v3 = groupTransform.Transform(localTransform.Transform(meshGeometry.Positions[idx3]));
@@ -368,38 +368,38 @@ namespace WpfApp1
                 }
             }
 
-            // Compute bounds once
+            // Jednorazowe obliczenie granic
             var positions = triangles.SelectMany(t => new[] { t.v1, t.v2, t.v3 });
             double minX = positions.Min(p => p.X);
             double maxX = positions.Max(p => p.X);
             double minY = positions.Min(p => p.Y);
             double maxY = positions.Max(p => p.Y);
-            double maxZ = positions.Max(p => p.Z) + 10; // Start rays from above the highest point
+            double maxZ = positions.Max(p => p.Z) + 10; // Rozpoczęcie promieni z pozycji powyżej najwyższego punktu
 
-            // Build a spatial index for triangles to optimize ray casting
+            // Budowanie indeksu przestrzennego dla trójkątów w celu optymalizacji rzucania promieni
             var triangleIndex = BuildTriangleSpatialIndex(triangles, step);
 
-            // Calculate grid bounds with a small margin to avoid edge effects
-            // This prevents generating points that are exactly on the model boundaries
+            // Obliczanie granic siatki z małym marginesem, aby uniknąć efektów krawędzi
+            // Zapobiega to generowaniu punktów dokładnie na granicach modelu
             double gridMinX = Math.Ceiling(minX / step) * step;
             double gridMaxX = Math.Floor(maxX / step) * step;
             double gridMinY = Math.Ceiling(minY / step) * step;
             double gridMaxY = Math.Floor(maxY / step) * step;
 
-            // Generate grid points using ray casting
+            // Generowanie punktów siatki przy użyciu rzucania promieni
             Parallel.For(0, (int)((gridMaxX - gridMinX) / step) + 1, xIndex =>
             {
                 double x = gridMinX + xIndex * step;
 
                 for (double y = gridMinY; y <= gridMaxY; y += step)
                 {
-                    // Cast ray from above down to the model
+                    // Rzucenie promienia z góry w dół do modelu
                     double? intersectionZ = CastRay(new Point3D(x, y, maxZ), new Vector3D(0, 0, -1), 
                                                    triangleIndex, triangles, x, y, step);
 
                     if (intersectionZ.HasValue)
                     {
-                        // Additional filter: ignore points that are very close to the edge
+                        // Dodatkowy filtr: ignorowanie punktów, które są bardzo blisko krawędzi
                         if (x > minX + 0.01 && x < maxX - 0.01 && 
                             y > minY + 0.01 && y < maxY - 0.01)
                         {
@@ -415,7 +415,7 @@ namespace WpfApp1
             return gridPoints;
         }
 
-        // Build a spatial index for triangles to make ray casting faster
+        // Budowanie indeksu przestrzennego dla trójkątów, aby przyspieszyć rzucanie promieni
         private Dictionary<(int, int), List<int>> BuildTriangleSpatialIndex(
             List<(Point3D v1, Point3D v2, Point3D v3)> triangles, double gridSize)
         {
@@ -425,13 +425,13 @@ namespace WpfApp1
             {
                 var triangle = triangles[i];
                 
-                // Find the bounds of the triangle in grid space
+                // Znajdowanie granic trójkąta w przestrzeni siatki
                 int minCellX = (int)Math.Floor(Math.Min(Math.Min(triangle.v1.X, triangle.v2.X), triangle.v3.X) / gridSize);
                 int maxCellX = (int)Math.Ceiling(Math.Max(Math.Max(triangle.v1.X, triangle.v2.X), triangle.v3.X) / gridSize);
                 int minCellY = (int)Math.Floor(Math.Min(Math.Min(triangle.v1.Y, triangle.v2.Y), triangle.v3.Y) / gridSize);
                 int maxCellY = (int)Math.Ceiling(Math.Max(Math.Max(triangle.v1.Y, triangle.v2.Y), triangle.v3.Y) / gridSize);
                 
-                // Add the triangle to all cells it overlaps
+                // Dodawanie trójkąta do wszystkich komórek, które nachodzi
                 for (int x = minCellX; x <= maxCellX; x++)
                 {
                     for (int y = minCellY; y <= maxCellY; y++)
@@ -449,7 +449,7 @@ namespace WpfApp1
             return index;
         }
 
-        // Cast a ray and find intersection with triangles
+        // Rzucanie promienia i szukanie przecięcia z trójkątami
         private double? CastRay(
             Point3D rayOrigin, 
             Vector3D rayDirection,
@@ -459,14 +459,14 @@ namespace WpfApp1
             double y, 
             double gridSize)
         {
-            // Normalize ray direction
+            // Normalizacja kierunku promienia
             rayDirection.Normalize();
             
-            // Get cell coordinates
+            // Uzyskanie współrzędnych komórki
             int cellX = (int)Math.Floor(x / gridSize);
             int cellY = (int)Math.Floor(y / gridSize);
             
-            // Search in a 3x3 grid around the point to catch triangles that might be near
+            // Szukanie w siatce 3x3 wokół punktu, aby wychwycić trójkąty, które mogą być w pobliżu
             double closestIntersection = double.MaxValue;
             bool foundIntersection = false;
             
@@ -482,25 +482,25 @@ namespace WpfApp1
                         {
                             var triangle = triangles[index];
                             
-                            // Check ray-triangle intersection
+                            // Sprawdzanie przecięcia promienia z trójkątem
                             if (RayIntersectsTriangle(rayOrigin, rayDirection, 
                                                       triangle.v1, triangle.v2, triangle.v3, 
                                                       out double t))
                             {
-                                // Calculate the normal of the triangle
+                                // Obliczanie normalnej trójkąta
                                 Vector3D edge1 = triangle.v2 - triangle.v1;
                                 Vector3D edge2 = triangle.v3 - triangle.v1;
                                 Vector3D normal = Vector3D.CrossProduct(edge1, edge2);
                                 normal.Normalize();
                                 
-                                // Skip near-vertical surfaces (sides of the model)
-                                // This helps avoid generating points on vertical walls
-                                double verticalThreshold = 0.3; // Adjust as needed
+                                // Pomijanie prawie pionowych powierzchni (boki modelu)
+                                // Pomaga to uniknąć generowania punktów na pionowych ścianach
+                                double verticalThreshold = 0.3; // Dostosuj w razie potrzeby
                                 if (Math.Abs(normal.Z) > verticalThreshold)
                                 {
-                                    // The intersection point is rayOrigin + t * rayDirection
-                                    // We're only interested in the Z value for grid height
-                                    if (t > 0 && t < closestIntersection) // t > 0 ensures we only get intersections in ray direction
+                                    // Punkt przecięcia to rayOrigin + t * rayDirection
+                                    // Interesuje nas tylko wartość Z dla wysokości siatki
+                                    if (t > 0 && t < closestIntersection) // t > 0 zapewnia, że bierzemy tylko przecięcia w kierunku promienia
                                     {
                                         closestIntersection = t;
                                         foundIntersection = true;
@@ -514,15 +514,15 @@ namespace WpfApp1
             
             if (foundIntersection)
             {
-                // Calculate the Z value at intersection point
+                // Obliczanie wartości Z w punkcie przecięcia
                 double intersectionZ = rayOrigin.Z + closestIntersection * rayDirection.Z;
                 return intersectionZ;
             }
             
-            return null; // No intersection found
+            return null; // Nie znaleziono przecięcia
         }
 
-        // Calculate ray-triangle intersection using Möller–Trumbore algorithm
+        // Obliczanie przecięcia promienia z trójkątem przy użyciu algorytmu Möllera–Trumbore'a
         private bool RayIntersectsTriangle(
             Point3D rayOrigin, 
             Vector3D rayDirection, 
@@ -540,7 +540,7 @@ namespace WpfApp1
             Vector3D h = Vector3D.CrossProduct(rayDirection, edge2);
             double a = Vector3D.DotProduct(edge1, h);
             
-            // If the determinant is near zero, ray lies in plane of triangle or ray is parallel to plane of triangle
+            // Jeśli wyznacznik jest bliski zeru, promień leży w płaszczyźnie trójkąta lub jest równoległy do płaszczyzny trójkąta
             if (a > -EPSILON && a < EPSILON)
                 return false;
             
@@ -548,21 +548,21 @@ namespace WpfApp1
             Vector3D s = new Vector3D(rayOrigin.X - vertex0.X, rayOrigin.Y - vertex0.Y, rayOrigin.Z - vertex0.Z);
             double u = f * Vector3D.DotProduct(s, h);
             
-            // If u is not between 0 and 1, the intersection point is outside the triangle
+            // Jeśli u nie jest między 0 a 1, punkt przecięcia jest poza trójkątem
             if (u < 0.0 || u > 1.0)
                 return false;
             
             Vector3D q = Vector3D.CrossProduct(s, edge1);
             double v = f * Vector3D.DotProduct(rayDirection, q);
             
-            // If v is negative or u + v is greater than 1, the intersection point is outside the triangle
+            // Jeśli v jest ujemne lub u + v jest większe niż 1, punkt przecięcia jest poza trójkątem
             if (v < 0.0 || u + v > 1.0)
                 return false;
             
-            // At this stage we can compute t to find out where the intersection point is on the line
+            // Na tym etapie możemy obliczyć t, aby dowiedzieć się, gdzie znajduje się punkt przecięcia na linii
             t = f * Vector3D.DotProduct(edge2, q);
             
-            // If t is greater than 0, we have a ray intersection
+            // Jeśli t jest większe niż 0, mamy przecięcie promienia
             return t > EPSILON;
         }
         private void DisplayGridPoints(List<Point3D> gridPoints)
