@@ -339,44 +339,62 @@ namespace WpfApp1
             // Optimize transformations
             var groupTransform = modelVisual.Transform ?? Transform3D.Identity;
 
-            // Precompute transformed positions
-            var transformedPositions = modelGroup.Children
-                .OfType<GeometryModel3D>()
-                .Where(m => m.Geometry is MeshGeometry3D)
-                .SelectMany(model =>
+            // Precompute all triangles with their transformations
+            var triangles = new List<(Point3D v1, Point3D v2, Point3D v3)>();
+            
+            foreach (var geometryModel in modelGroup.Children.OfType<GeometryModel3D>())
+            {
+                if (geometryModel.Geometry is MeshGeometry3D meshGeometry)
                 {
-                    var localTransform = model.Transform;
-                    var meshGeometry = (MeshGeometry3D)model.Geometry;
-                    return meshGeometry.Positions.Select(p =>
-                        groupTransform.Transform(localTransform.Transform(p))
-                    );
-                })
-                .ToArray();
+                    var localTransform = geometryModel.Transform;
+                    
+                    // Process each triangle
+                    for (int i = 0; i < meshGeometry.TriangleIndices.Count; i += 3)
+                    {
+                        if (i + 2 < meshGeometry.TriangleIndices.Count)
+                        {
+                            int idx1 = meshGeometry.TriangleIndices[i];
+                            int idx2 = meshGeometry.TriangleIndices[i + 1];
+                            int idx3 = meshGeometry.TriangleIndices[i + 2];
+                            
+                            // Get transformed vertices
+                            var v1 = groupTransform.Transform(localTransform.Transform(meshGeometry.Positions[idx1]));
+                            var v2 = groupTransform.Transform(localTransform.Transform(meshGeometry.Positions[idx2]));
+                            var v3 = groupTransform.Transform(localTransform.Transform(meshGeometry.Positions[idx3]));
+                            
+                            triangles.Add((v1, v2, v3));
+                        }
+                    }
+                }
+            }
 
             // Compute bounds once
-            double minX = transformedPositions.Min(p => p.X);
-            double maxX = transformedPositions.Max(p => p.X);
-            double minY = transformedPositions.Min(p => p.Y);
-            double maxY = transformedPositions.Max(p => p.Y);
+            var positions = triangles.SelectMany(t => new[] { t.v1, t.v2, t.v3 });
+            double minX = positions.Min(p => p.X);
+            double maxX = positions.Max(p => p.X);
+            double minY = positions.Min(p => p.Y);
+            double maxY = positions.Max(p => p.Y);
+            double maxZ = positions.Max(p => p.Z) + 10; // Start rays from above the highest point
 
-            // Create spatial index for faster lookup
-            var spatialIndex = CreateSpatialIndex(transformedPositions, step);
+            // Build a spatial index for triangles to optimize ray casting
+            var triangleIndex = BuildTriangleSpatialIndex(triangles, step);
 
-            // Parallel grid generation with optimized point finding
+            // Generate grid points using ray casting
             Parallel.For(0, (int)((maxX - minX) / step) + 1, xIndex =>
             {
                 double x = minX + xIndex * step;
 
                 for (double y = minY; y <= maxY; y += step)
                 {
-                    // Optimized point finding using spatial index
-                    double maxZ = FindMaxZFromSpatialIndex(spatialIndex, x, y, step);
+                    // Cast ray from above down to the model
+                    double? intersectionZ = CastRay(new Point3D(x, y, maxZ), new Vector3D(0, 0, -1), 
+                                                   triangleIndex, triangles, x, y, step);
 
-                    if (!double.IsNaN(maxZ))
+                    if (intersectionZ.HasValue)
                     {
                         lock (gridPoints)
                         {
-                            gridPoints.Add(new Point3D(x, y, maxZ));
+                            gridPoints.Add(new Point3D(x, y, intersectionZ.Value));
                         }
                     }
                 }
@@ -385,67 +403,143 @@ namespace WpfApp1
             return gridPoints;
         }
 
-        // Create a spatial index for faster point lookup
-        private Dictionary<(int, int), List<Point3D>> CreateSpatialIndex(IEnumerable<Point3D> points, double gridSize)
+        // Build a spatial index for triangles to make ray casting faster
+        private Dictionary<(int, int), List<int>> BuildTriangleSpatialIndex(
+            List<(Point3D v1, Point3D v2, Point3D v3)> triangles, double gridSize)
         {
-            var spatialIndex = new Dictionary<(int, int), List<Point3D>>();
-
-            foreach (var point in points)
+            var index = new Dictionary<(int, int), List<int>>();
+            
+            for (int i = 0; i < triangles.Count; i++)
             {
-                // Compute grid cell coordinates
-                int cellX = (int)Math.Floor(point.X / gridSize);
-                int cellY = (int)Math.Floor(point.Y / gridSize);
-                var cell = (cellX, cellY);
-
-                // Add point to corresponding cell
-                if (!spatialIndex.ContainsKey(cell))
+                var triangle = triangles[i];
+                
+                // Find the bounds of the triangle in grid space
+                int minCellX = (int)Math.Floor(Math.Min(Math.Min(triangle.v1.X, triangle.v2.X), triangle.v3.X) / gridSize);
+                int maxCellX = (int)Math.Ceiling(Math.Max(Math.Max(triangle.v1.X, triangle.v2.X), triangle.v3.X) / gridSize);
+                int minCellY = (int)Math.Floor(Math.Min(Math.Min(triangle.v1.Y, triangle.v2.Y), triangle.v3.Y) / gridSize);
+                int maxCellY = (int)Math.Ceiling(Math.Max(Math.Max(triangle.v1.Y, triangle.v2.Y), triangle.v3.Y) / gridSize);
+                
+                // Add the triangle to all cells it overlaps
+                for (int x = minCellX; x <= maxCellX; x++)
                 {
-                    spatialIndex[cell] = new List<Point3D>();
+                    for (int y = minCellY; y <= maxCellY; y++)
+                    {
+                        var cell = (x, y);
+                        if (!index.ContainsKey(cell))
+                        {
+                            index[cell] = new List<int>();
+                        }
+                        index[cell].Add(i);
+                    }
                 }
-                spatialIndex[cell].Add(point);
             }
-
-            return spatialIndex;
+            
+            return index;
         }
 
-        // Find max Z using spatial index
-        private double FindMaxZFromSpatialIndex(
-            Dictionary<(int, int), List<Point3D>> spatialIndex,
-            double x,
-            double y,
+        // Cast a ray and find intersection with triangles
+        private double? CastRay(
+            Point3D rayOrigin, 
+            Vector3D rayDirection,
+            Dictionary<(int, int), List<int>> triangleIndex,
+            List<(Point3D v1, Point3D v2, Point3D v3)> triangles,
+            double x, 
+            double y, 
             double gridSize)
         {
-            // Compute the cell for the current point
+            // Normalize ray direction
+            rayDirection.Normalize();
+            
+            // Get cell coordinates
             int cellX = (int)Math.Floor(x / gridSize);
             int cellY = (int)Math.Floor(y / gridSize);
-
-            // Check neighboring cells
-            double maxZ = double.NaN;
+            
+            // Search in a 3x3 grid around the point to catch triangles that might be near
+            double closestIntersection = double.MaxValue;
+            bool foundIntersection = false;
+            
             for (int dx = -1; dx <= 1; dx++)
             {
                 for (int dy = -1; dy <= 1; dy++)
                 {
                     var cell = (cellX + dx, cellY + dy);
-
-                    if (spatialIndex.TryGetValue(cell, out var cellPoints))
+                    
+                    if (triangleIndex.TryGetValue(cell, out var triangleIndices))
                     {
-                        // Find max Z in points close to (x,y)
-                        var zValues = cellPoints
-                            .Where(p =>
-                                Math.Abs(p.X - x) < gridSize / 2 &&
-                                Math.Abs(p.Y - y) < gridSize / 2)
-                            .Select(p => p.Z);
-
-                        if (zValues.Any())
+                        foreach (var index in triangleIndices)
                         {
-                            double currentMaxZ = zValues.Max();
-                            maxZ = double.IsNaN(maxZ) ? currentMaxZ : Math.Max(maxZ, currentMaxZ);
+                            var triangle = triangles[index];
+                            
+                            // Check ray-triangle intersection
+                            if (RayIntersectsTriangle(rayOrigin, rayDirection, 
+                                                      triangle.v1, triangle.v2, triangle.v3, 
+                                                      out double t))
+                            {
+                                // The intersection point is rayOrigin + t * rayDirection
+                                // We're only interested in the Z value for grid height
+                                if (t > 0 && t < closestIntersection) // t > 0 ensures we only get intersections in ray direction
+                                {
+                                    closestIntersection = t;
+                                    foundIntersection = true;
+                                }
+                            }
                         }
                     }
                 }
             }
+            
+            if (foundIntersection)
+            {
+                // Calculate the Z value at intersection point
+                double intersectionZ = rayOrigin.Z + closestIntersection * rayDirection.Z;
+                return intersectionZ;
+            }
+            
+            return null; // No intersection found
+        }
 
-            return maxZ;
+        // Calculate ray-triangle intersection using Möller–Trumbore algorithm
+        private bool RayIntersectsTriangle(
+            Point3D rayOrigin, 
+            Vector3D rayDirection, 
+            Point3D vertex0, 
+            Point3D vertex1, 
+            Point3D vertex2, 
+            out double t)
+        {
+            t = 0;
+            const double EPSILON = 0.0000001;
+            
+            Vector3D edge1 = new Vector3D(vertex1.X - vertex0.X, vertex1.Y - vertex0.Y, vertex1.Z - vertex0.Z);
+            Vector3D edge2 = new Vector3D(vertex2.X - vertex0.X, vertex2.Y - vertex0.Y, vertex2.Z - vertex0.Z);
+            
+            Vector3D h = Vector3D.CrossProduct(rayDirection, edge2);
+            double a = Vector3D.DotProduct(edge1, h);
+            
+            // If the determinant is near zero, ray lies in plane of triangle or ray is parallel to plane of triangle
+            if (a > -EPSILON && a < EPSILON)
+                return false;
+            
+            double f = 1.0 / a;
+            Vector3D s = new Vector3D(rayOrigin.X - vertex0.X, rayOrigin.Y - vertex0.Y, rayOrigin.Z - vertex0.Z);
+            double u = f * Vector3D.DotProduct(s, h);
+            
+            // If u is not between 0 and 1, the intersection point is outside the triangle
+            if (u < 0.0 || u > 1.0)
+                return false;
+            
+            Vector3D q = Vector3D.CrossProduct(s, edge1);
+            double v = f * Vector3D.DotProduct(rayDirection, q);
+            
+            // If v is negative or u + v is greater than 1, the intersection point is outside the triangle
+            if (v < 0.0 || u + v > 1.0)
+                return false;
+            
+            // At this stage we can compute t to find out where the intersection point is on the line
+            t = f * Vector3D.DotProduct(edge2, q);
+            
+            // If t is greater than 0, we have a ray intersection
+            return t > EPSILON;
         }
         private void DisplayGridPoints(List<Point3D> gridPoints)
         {
