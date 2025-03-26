@@ -118,10 +118,10 @@ namespace WpfApp1
         {
             ApplyRotationToModel(new Vector3D(0, 0, 1), 15);
         }
-        //private void z90plus(object sender, RoutedEventArgs e)
-        //{
-        //    ApplyRotationToModel(new Vector3D(0, 0, 1), 90);
-        //}
+        private void z90plus(object sender, RoutedEventArgs e)
+        {
+            ApplyRotationToModel(new Vector3D(0, 0, 1), 90);
+        }
         private double MinZ()
         {
             if (modelVisual?.Content is Model3DGroup modelGroup)
