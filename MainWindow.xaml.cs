@@ -12,14 +12,13 @@ using System.Windows.Media.Imaging;
 using System.Windows.Media.Media3D;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
+using System.Linq;
+using System.IO;
+using System.Diagnostics;
 
 
 namespace WpfApp1
 {
-    /// <summary>
-    /// Interaction logic for MainWindow.xaml
-    /// </summary>
-
     public partial class MainWindow : Window
     {
         private ModelVisual3D modelVisual = new ModelVisual3D();
@@ -74,7 +73,7 @@ namespace WpfApp1
                 viewport.Children.Add(modelVisual);
             }
         }
-            private void x90minus(object sender, RoutedEventArgs e)
+        private void x90minus(object sender, RoutedEventArgs e)
         {
             ApplyRotationToModel(new Vector3D(1, 0, 0), -90);
         }
@@ -272,6 +271,12 @@ namespace WpfApp1
             DisplayGridPoints(gridPoints);
         }
 
+        private BitmapSource maskBitmap = null;
+        private byte[] maskPixelData = null;
+        private int maskWidth = 0;
+        private int maskHeight = 0;
+        private int maskStride = 0;
+
         private void ApplyProjectedTexture(string textureFilePath)
         {
             double maxZ = MaxZ();
@@ -279,20 +284,31 @@ namespace WpfApp1
             double minY = MinY();
             double maxX = MaxX();
             double maxY = MaxY();
-            // Tworzymy teksturę z pliku PNG
+
+            // Load and preprocess the mask bitmap for fast pixel access
             var bitmap = new BitmapImage(new Uri(textureFilePath, UriKind.Absolute));
+            maskBitmap = bitmap;
+
+            // Convert to a format we can easily read pixels from
+            var convertedBitmap = new FormatConvertedBitmap(bitmap, PixelFormats.Bgra32, null, 0);
+            maskWidth = convertedBitmap.PixelWidth;
+            maskHeight = convertedBitmap.PixelHeight;
+            maskStride = maskWidth * 4; // 4 bytes per pixel (BGRA)
+
+            // Load all pixel data into memory once
+            maskPixelData = new byte[maskHeight * maskStride];
+            convertedBitmap.CopyPixels(maskPixelData, maskStride, 0);
+
             var texture = new DiffuseMaterial(new ImageBrush(bitmap));
 
-            // Tworzymy płaszczyznę w układzie XY (rozciągniętą na jednostkowy kwadrat)
+            // ... rest of your existing ApplyProjectedTexture code remains the same
             var planeMesh = new MeshGeometry3D();
 
-            // Określamy wierzchołki płaszczyzny w układzie XY (Z = 0)
-            planeMesh.Positions.Add(new Point3D(minX, maxY, maxZ)); // Lewy dolny róg
-            planeMesh.Positions.Add(new Point3D(maxX, maxY, maxZ));  // Prawy dolny róg
-            planeMesh.Positions.Add(new Point3D(maxX, minY, maxZ));   // Prawy górny róg
-            planeMesh.Positions.Add(new Point3D(minX, minY, maxZ));  // Lewy górny róg
+            planeMesh.Positions.Add(new Point3D(minX, maxY, maxZ));
+            planeMesh.Positions.Add(new Point3D(maxX, maxY, maxZ));
+            planeMesh.Positions.Add(new Point3D(maxX, minY, maxZ));
+            planeMesh.Positions.Add(new Point3D(minX, minY, maxZ));
 
-            // Tworzymy trójkąty z wierzchołków
             planeMesh.TriangleIndices.Add(0);
             planeMesh.TriangleIndices.Add(1);
             planeMesh.TriangleIndices.Add(2);
@@ -300,32 +316,26 @@ namespace WpfApp1
             planeMesh.TriangleIndices.Add(2);
             planeMesh.TriangleIndices.Add(3);
 
-            // Dodajemy współrzędne tekstur dla wierzchołków
             planeMesh.TextureCoordinates.Add(new Point(0, 0));
             planeMesh.TextureCoordinates.Add(new Point(1, 0));
             planeMesh.TextureCoordinates.Add(new Point(1, 1));
             planeMesh.TextureCoordinates.Add(new Point(0, 1));
 
             var materialGroup = new MaterialGroup();
-            materialGroup.Children.Add(texture); // Przód
-            materialGroup.Children.Add(texture); // Tył (identyczna tekstura)
+            materialGroup.Children.Add(texture);
+            materialGroup.Children.Add(texture);
 
-            // Tworzymy model 3D dla płaszczyzny i przypisujemy teksturę
             var planeModel = new GeometryModel3D(planeMesh, materialGroup)
             {
-                // Ustawiamy transformację, aby płaszczyzna była na wysokości Z = 0
-                Transform = new TranslateTransform3D(0, 0, 0) // Z = 0, na płaszczyźnie XY
+                Transform = new TranslateTransform3D(0, 0, 0)
             };
 
-            // Ustawiamy culling mode, aby nie ukrywać tylnej strony płaszczyzny
             planeModel.BackMaterial = texture;
             planeModel.Material = texture;
 
-            // Tworzymy wizualizację modelu 3D i dodajemy ją do widoku
             var modelVisual = new ModelVisual3D();
             modelVisual.Content = planeModel;
 
-            // Dodajemy płaszczyznę do sceny
             viewport.Children.Add(modelVisual);
         }
         private List<Point3D> GenerateGridWithMaxZ()
@@ -574,6 +584,241 @@ namespace WpfApp1
                 Points = new Point3DCollection(gridPoints)
             };
             viewport.Children.Add(pointsVisual); // Dodajemy punkty do sceny
+        }
+
+        private void GenerateGcode_Click(object sender, RoutedEventArgs e)
+        {
+            var gridPoints = GenerateGridWithMaxZ();
+
+            if (gridPoints.Count == 0)
+            {
+                MessageBox.Show("No grid points were generated. Please load a model first.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+
+            SaveFileDialog saveFileDialog = new SaveFileDialog
+            {
+                Filter = "G-code Files (*.gcode)|*.gcode",
+                Title = "Save G-code File"
+            };
+
+            if (saveFileDialog.ShowDialog() == true)
+            {
+                GenerateGcodeLineByLine(gridPoints, saveFileDialog.FileName);
+                MessageBox.Show($"G-code successfully saved to {saveFileDialog.FileName}", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+        }
+
+        private void GenerateGcodeLineByLine(List<Point3D> points, string filePath)
+        {
+            // Cache model bounds once
+            CacheModelBounds();
+
+            // Get printer settings from UI or use defaults
+            double feedRate = double.Parse(predkosc.Text); // mm/min
+            double travelFeedRate = double.Parse(predkosc.Text); // mm/min
+            double retractDistance = 5; // mm
+            double extrusionFactor = 0.05; // extrusion per mm of movement
+            double xOffset = double.Parse(xoffset.Text);
+            double yOffset = double.Parse(yoffset.Text);
+            double zOffset = double.Parse(zoffset.Text) - MinZ(); // Z offset for first layer
+
+            StringBuilder gcode = new StringBuilder();
+
+            // Start G-code (same as before)
+            gcode.AppendLine("; G-code generated from WPF 3D Model Viewer");
+            gcode.AppendLine("; Generated: " + DateTime.Now.ToString());
+            gcode.AppendLine("; Number of points: " + points.Count);
+            gcode.AppendLine();
+            gcode.AppendLine("; Start G-code");
+
+            gcode.AppendLine("G28"); //home
+            gcode.AppendLine("G92 E0"); //zapis współrzędnych
+            gcode.AppendLine("G1 Z50 F" + travelFeedRate);
+            gcode.AppendLine("G1 X0 Y0 F" + travelFeedRate);
+
+            // Sort points in lines
+            var sortedPoints = SortPointsInLines(points);
+
+            // PRE-COMPUTE all color states to avoid repeated calculations
+            var colorStates = new bool[sortedPoints.Count];
+            Parallel.For(0, sortedPoints.Count, i =>
+            {
+                colorStates[i] = IsPointOnWhitePixelOptimized(sortedPoints[i], cachedMinX, cachedMaxX, cachedMinY, cachedMaxY);
+            });
+
+            // Generate path G-code
+            double currentX = 0, currentY = 0, currentZ = 5;
+            double extrusionAmount = 0;
+            bool firstPoint = true;
+            bool currentFanState = false; // Track current fan state to avoid redundant commands
+
+            gcode.AppendLine($"; Processing {sortedPoints.Count} points");
+
+            for (int i = 0; i < sortedPoints.Count; i++)
+            {
+                var point = sortedPoints[i];
+                bool isWhitePixel = colorStates[i];
+
+                double x = point.X + xOffset;
+                double y = point.Y + yOffset;
+                double z = point.Z + zOffset;
+
+                if (firstPoint)
+                {
+                    // First point - just move to position
+
+                    gcode.AppendLine($"G1 Z{z+40:F3} F{feedRate}"); 
+                    gcode.AppendLine($"G1 X{x:F3} Y{y:F3} F{travelFeedRate}");
+                    gcode.AppendLine($"G1 Z{z:F3} F{feedRate}");
+                    gcode.AppendLine("G1 E0");
+
+                    // Set initial fan state
+                    if (isWhitePixel)
+                    {
+                        gcode.AppendLine("M106 S255");
+                        currentFanState = true;
+                    }
+                    else
+                    {
+                        gcode.AppendLine("M107");
+                        currentFanState = false;
+                    }
+
+                    firstPoint = false;
+                }
+                else
+                {
+                    // Move to next point
+                    gcode.AppendLine($"G1 X{x:F3} Y{y:F3} Z{z:F3} F{feedRate}");
+
+                    // Only change fan state if it's different from current state
+                    if (isWhitePixel && !currentFanState)
+                    {
+                        gcode.AppendLine("M106 S255");
+                        gcode.AppendLine("G4 P50");
+                        currentFanState = true;
+                    }
+                    else if (!isWhitePixel && currentFanState)
+                    {
+                        gcode.AppendLine("M107");
+                        gcode.AppendLine("G4 P50");
+                        currentFanState = false;
+                    }
+                }
+
+                currentX = x;
+                currentY = y;
+                currentZ = z;
+            }
+
+            // End G-code (same as before)
+            gcode.AppendLine("; End G-code");
+            gcode.AppendLine($"G1 Z{currentZ + 10} F{feedRate}");
+            gcode.AppendLine($"G1 E{extrusionAmount - retractDistance} F{feedRate * 2}");
+            gcode.AppendLine("M104 S0");
+            gcode.AppendLine("M140 S0");
+            gcode.AppendLine("G28 X0 Y0");
+            gcode.AppendLine("M84");
+
+            // Write to file
+            File.WriteAllText(filePath, gcode.ToString());
+        }
+
+        private List<Point3D> SortPointsInLines(List<Point3D> points)
+        {
+            double gridStep = double.TryParse(Gestoscsiatki.Text, out double step) ? step : 1.0;
+
+            // Group points by their rounded X coordinate (to handle floating point precision)
+            var pointsByX = points.GroupBy(p => Math.Round(p.X / gridStep) * gridStep)
+                                  .OrderBy(g => g.Key)
+                                  .ToDictionary(g => g.Key, g => g.ToList());
+
+            List<Point3D> sortedPoints = new List<Point3D>(points.Count);
+            bool ascending = true; // Direction flag for Y sorting
+
+            // Process each X line
+            foreach (var xLine in pointsByX)
+            {
+                List<Point3D> pointsInXLine;
+
+                if (ascending)
+                {
+                    // Sort Y ascending (low to high)
+                    pointsInXLine = xLine.Value.OrderBy(p => p.Y).ToList();
+                    ascending = false; // Flip direction for next line
+                }
+                else
+                {
+                    // Sort Y descending (high to low)
+                    pointsInXLine = xLine.Value.OrderByDescending(p => p.Y).ToList();
+                    ascending = true; // Flip direction for next line
+                }
+
+                sortedPoints.AddRange(pointsInXLine);
+                Debug.WriteLine($"Completed X line {xLine.Key} with {pointsInXLine.Count} points, direction: {(ascending ? "ascending" : "descending")}");
+            }
+
+            // Log the result for verification
+            Debug.WriteLine($"Total sorted points: {sortedPoints.Count} (original: {points.Count})");
+
+            return sortedPoints;
+        }
+        private bool IsPointOnWhitePixelOptimized(Point3D point, double minX, double maxX, double minY, double maxY)
+        {
+            if (maskPixelData == null || maskWidth == 0 || maskHeight == 0)
+                return true; // Default to white if no mask loaded
+
+            // Convert 3D world coordinates to texture UV coordinates (0-1 range)
+            double u = (point.X - minX) / (maxX - minX);
+            double v = 1.0 - (point.Y - minY) / (maxY - minY); // Flip V coordinate
+
+            // Clamp UV coordinates to [0,1] range
+            u = Math.Max(0, Math.Min(1, u));
+            v = Math.Max(0, Math.Min(1, v));
+
+            // Convert UV to pixel coordinates
+            int pixelX = (int)(u * (maskWidth - 1));
+            int pixelY = (int)(v * (maskHeight - 1));
+
+            // Ensure pixel coordinates are within bounds
+            pixelX = Math.Max(0, Math.Min(maskWidth - 1, pixelX));
+            pixelY = Math.Max(0, Math.Min(maskHeight - 1, pixelY));
+
+            // Calculate pixel index in the byte array (BGRA format = 4 bytes per pixel)
+            int pixelIndex = pixelY * maskStride + pixelX * 4;
+
+            // Read RGB values directly from the byte array
+            byte blue = maskPixelData[pixelIndex];
+            byte green = maskPixelData[pixelIndex + 1];
+            byte red = maskPixelData[pixelIndex + 2];
+
+            // Calculate brightness (simple average of RGB values)
+            double brightness = (red + green + blue) / 3.0;
+
+            // Return true if pixel is more white than black (threshold at 128)
+            return brightness > 128;
+        }
+
+        // Add these fields to your MainWindow class
+        private double cachedMinX, cachedMaxX, cachedMinY, cachedMaxY;
+        private bool boundsAreCached = false;
+
+        // Optimized method to cache model bounds
+        private void CacheModelBounds()
+        {
+            if (!boundsAreCached)
+            {
+                cachedMinX = MinX();
+                cachedMaxX = MaxX();
+                cachedMinY = MinY();
+                cachedMaxY = MaxY();
+                boundsAreCached = true;
+            }
+        }
+        private void InvalidateBoundsCache()
+        {
+            boundsAreCached = false;
         }
     }
 }

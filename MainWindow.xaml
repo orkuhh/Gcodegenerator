@@ -7,22 +7,26 @@
         xmlns:media3d="clr-namespace:System.Windows.Media.Media3D;assembly=PresentationCore"
         mc:Ignorable="d"
         xmlns:h="http://helix-toolkit.org/wpf"
-        Title="MainWindow" Height="700" Width="800">
+        Title="MainWindow" Height="700" Width="1200">
     <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="387*"/>
+            <ColumnDefinition Width="413*"/>
+        </Grid.ColumnDefinitions>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <Button Content="Otwórz OBJ" Click="OpenFile_Click" Margin="10,14,665,67"/>
+        <Button Content="Otwórz OBJ" Click="OpenFile_Click" Margin="10,14,446,67"/>
 
-        <h:HelixViewport3D x:Name="viewport" Grid.Row="1" ZoomExtentsWhenLoaded="True">
+        <h:HelixViewport3D x:Name="viewport" Grid.Row="1" ZoomExtentsWhenLoaded="True" Grid.ColumnSpan="2">
             <h:DefaultLights/>
             <h:ThreePointLights Distance="1000"/>
 
             <h:GridLinesVisual3D Center="0,0,0" Width="200" Length="200" MinorDistance="10" MajorDistance="50" Thickness="0.5" Fill="#FF3C3C3C" />
         </h:HelixViewport3D>
-        <StackPanel Orientation="Vertical" HorizontalAlignment="Left" Margin="624,10,0,10">
+        <StackPanel Orientation="Vertical" HorizontalAlignment="Left" Margin="446,7,0,13" Grid.Column="1">
             <StackPanel Orientation="Horizontal">
                 <Button Content="-90" Click="x90minus" Padding="10"/>
                 <Button Content="-15" Click="x15minus" Padding="10"/>
@@ -42,13 +46,22 @@
                 <Button Content="+90" Click="z90plus" Padding="10"/>
             </StackPanel>
         </StackPanel>
-        <Button Content="Wygeneruj warstwę" Click="Generate" Margin="10,72,540,9"/>
-        <TextBox x:Name="MaxXTextBox" IsReadOnly="True" Width="100" Height="25" Margin="505,10,195,100"/>
-        <TextBox x:Name="MaxYTextBox" IsReadOnly="True" Width="100" Height="25" Margin="505,44,195,66"/>
-        <TextBox x:Name="MinZTextBox" IsReadOnly="True" Width="100" Height="25" Margin="505,82,195,28"/>
-        <TextBox x:Name="MinXTextBox" IsReadOnly="True" Width="100" Height="25" Margin="400,10,300,100"/>
-        <TextBox x:Name="MinYTextBox" IsReadOnly="True" Width="100" Height="25" Margin="400,44,300,66"/>
-        <Button Content="Otwórz Maskę" Click="OpenMask_Click" Margin="135,14,540,67"/>
-        <TextBox x:Name="Gestoscsiatki" IsReadOnly="False" Height="25" Margin="265,99,423,11" Text="4"/>
+        <Button Content="Wygeneruj" Click="Generate" Margin="252,14,204,67"/>
+        <TextBox x:Name="MaxXTextBox" IsReadOnly="True" Width="100" Height="25" Margin="330,10,189,100" Grid.Column="1"/>
+        <TextBox x:Name="MaxYTextBox" IsReadOnly="True" Width="100" Height="25" Margin="330,42,189,67" Grid.Column="1"/>
+        <TextBox x:Name="MinZTextBox" IsReadOnly="True" Width="100" Height="25" Margin="330,74,189,36" Grid.Column="1"/>
+        <TextBox x:Name="MinXTextBox" IsReadOnly="True" Width="100" Height="25" Margin="224,10,295,100" Grid.Column="1"/>
+        <TextBox x:Name="MinYTextBox" IsReadOnly="True" Width="100" Height="25" Margin="224,41,295,69" Grid.Column="1"/>
+        <Button Content="Otwórz Maskę" Click="OpenMask_Click" Margin="140,14,334,67"/>
+        <TextBox x:Name="Gestoscsiatki" IsReadOnly="False" Height="25" Margin="254,103,274,8" Text="0,5"/>
+        <Button Content="Zapisz" Click="GenerateGcode_Click" HorizontalAlignment="Left" Margin="382,16,0,0" VerticalAlignment="Top" Height="53" Width="124"/>
+        <TextBox x:Name="xoffset" IsReadOnly="False" Height="25" Margin="10,103,520,8" Text="114"/>
+        <TextBox x:Name="yoffset" IsReadOnly="False" Height="25" Margin="66,103,464,8" Text="156"/>
+        <TextBox x:Name="zoffset" IsReadOnly="False" Height="25" Margin="122,103,408,8" Text="21"/>
+        <TextBox x:Name="predkosc" IsReadOnly="False" Height="25" Margin="196,103,334,8" Text="900"/>
+        <Label Content="Dokładność" HorizontalAlignment="Left" Margin="68,43,0,0" VerticalAlignment="Top" Grid.Column="1"/>
+        <Label Content="X               Y               Z" HorizontalAlignment="Left" Margin="10,74,0,0" VerticalAlignment="Top" Width="162"/>
+        <Label Content="Prędkość" HorizontalAlignment="Left" Margin="194,75,0,0" VerticalAlignment="Top"/>
+        <Label Content="Dokładność" HorizontalAlignment="Left" Margin="252,74,0,0" VerticalAlignment="Top" RenderTransformOrigin="0.515,0.31"/>
     </Grid>
 </Window>
